@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import ChatMessage from "./components/ChatMessage"
 import ModelPicker from "./components/ModelPicker"
 import { useLLM, type ChatMessage as Msg, type LoadProgress } from "./hooks/useLLM"
 import { CATALOG } from "./lib/models"
-import { FiPlus, FiSend, FiSquare } from "react-icons/fi"
+import { FiSend, FiSquare } from "react-icons/fi"
 
 const DEFAULT_SYSTEM = "You are a helpful assistant. Keep responses concise when possible."
 
@@ -170,9 +170,10 @@ export default function App() {
   const deviceLabel = device === "detecting…" ? "detecting…" : (device || "").toString().toLowerCase()
 
   return (
-    <div className="min-h-screen w-full bg-neutral-900 text-neutral-100 select-none flex flex-col">
-      {/* Top bar */}
-      <header className="sticky top-0 z-10 bg-neutral-900/90 backdrop-blur border-b border-neutral-800">
+    // GRID LAYOUT: header (auto) / main (1fr, scrolls) / footer (auto)
+    <div className="h-screen w-full grid grid-rows-[auto,1fr,auto] overflow-hidden bg-neutral-900 text-neutral-100 select-none">
+      {/* Top bar (row 1) */}
+      <header className="border-b border-neutral-800">
         <div className="mx-auto w-full max-w-5xl px-4">
           <div className="h-14 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -187,7 +188,7 @@ export default function App() {
                 onLoad={handleLoad}
                 onUse={handleUse}
               />
-              {/* Device display (same text style you had before, just moved here) */}
+              {/* Device text exactly like before */}
               <span className="text-xs text-neutral-400">Device: {deviceLabel}</span>
             </div>
 
@@ -196,23 +197,24 @@ export default function App() {
               onClick={onNewChat}
               title="Start a new chat"
             >
-              <FiPlus />
+              {/* icon kept as before */}
+              <svg width="16" height="16" viewBox="0 0 24 24" className="opacity-90"><path fill="currentColor" d="M13 11V5h-2v6H5v2h6v6h2v-6h6v-2z"/></svg>
               <span>New chat</span>
             </button>
           </div>
         </div>
       </header>
 
-      {/* Chat area (flex-1 so only this pane scrolls; no page scrollbar) */}
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 relative min-h-full">
-          {/* When no active model, show the SAME CenterNotice as the empty chat state */}
+      {/* Chat area (row 2) — ONLY this scrolls */}
+      <main className="min-h-0 overflow-y-auto">
+        <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 min-h-full">
+          {/* No model selected */}
           {!ready ? (
             <CenterNotice
               title="Select a model to start"
               subtitle="Use the top-left picker: Load → Use"
             />
-          ) : // When ready but no user/assistant messages yet — same component, same styling
+          ) : // Empty conversation (same component, same styling)
           messages.filter(m => m.role !== "system").length === 0 ? (
             <CenterNotice
               title="Say hello to your in-browser model 👋"
@@ -226,11 +228,7 @@ export default function App() {
                 const pending = isLast && m.role === "assistant" && streaming && m.content.length === 0
                 return (
                   <div key={i} className="select-text">
-                    <ChatMessage
-                      role={m.role as "user" | "assistant"}
-                      content={m.content}
-                      pending={pending}
-                    />
+                    <ChatMessage role={m.role as "user" | "assistant"} content={m.content} pending={pending} />
                   </div>
                 )
               })
@@ -239,11 +237,9 @@ export default function App() {
         </div>
       </main>
 
-
-      {/* Composer */}
+      {/* Composer (row 3) */}
       <footer className="border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 py-3">
-          {/* Align input & buttons to identical height */}
           <div className="flex gap-2 items-center">
             <input
               ref={inputRef}
