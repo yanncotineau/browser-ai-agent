@@ -18,20 +18,24 @@ export type LoadProgress = {
 }
 
 /**
- * NOTE: We support:
- * - Switching models (replace current generator even if one is loaded).
- * - Per-file download progress aggregation (emits to onProgress).
+ * New capabilities:
+ * - preloadModel(id): downloads & instantiates a generator, cached by id (can run concurrently).
+ * - useModel(id): switch to an already preloaded model instantly (no re-download).
+ * - generate(history): uses the *currently selected* generator.
  */
 export function useLLM() {
   const [ready, setReady] = useState(false)
-  const [loadingModel, setLoadingModel] = useState(false)
-  const [device, setDevice] = useState<DeviceKind | "detecting…">("detecting…")
   const [modelId, setModelId] = useState<string>("")
+  const [device, setDevice] = useState<DeviceKind | "detecting…">("detecting…")
 
-  const generatorRef = useRef<any>(null)
+  // Cache of loaded generators (id -> generator)
+  const cacheRef = useRef<Map<string, any>>(new Map())
+  // Currently active generator
+  const activeRef = useRef<any>(null)
+  // Track any running generation
   const abortRef = useRef<AbortController | null>(null)
 
-  // keep logs quiet if supported
+  // quiet logs if supported
   try { (env.backends as any)?.onnx && ((env.backends as any).onnx.logLevel = "error") } catch {}
   env.allowLocalModels = false
 
@@ -42,75 +46,66 @@ export function useLLM() {
       : "wasm"
 
   /**
-   * Load or switch to a model.
-   * - Always replaces the current model if one exists.
-   * - Reports aggregated download progress via onProgress (if provided).
+   * Preload (download + instantiate) a model into the cache.
+   * - Does NOT affect the current active model.
+   * - Can be called for multiple ids simultaneously.
+   * - Emits aggregated progress via onProgress.
    */
-  const loadModel = useCallback(
+  const preloadModel = useCallback(
     async (
       id: string,
       preferred?: DeviceKind,
       onProgress?: (p: LoadProgress) => void
     ) => {
-      // If a model is already loaded or a gen is running, abort then replace.
-      abortRef.current?.abort()
-      generatorRef.current = null
-      setReady(false)
+      if (cacheRef.current.has(id)) return // already cached
 
-      setLoadingModel(true)
-      try {
-        const dev: DeviceKind = preferred ?? detectDevice()
-        setDevice(dev)
-        setModelId(id)
+      const dev: DeviceKind = preferred ?? detectDevice()
+      if (device === "detecting…") setDevice(dev) // first time detection
 
-        // Aggregate per-file progress
-        const fileProgress = new Map<string, { loaded: number; total: number }>()
-        const report = () => {
-          if (!onProgress) return
-          let loadedBytes = 0
-          let totalBytes = 0
-          for (const { loaded, total } of fileProgress.values()) {
-            loadedBytes += loaded || 0
-            totalBytes += total || 0
-          }
-          const percent =
-            totalBytes > 0 ? Math.max(0, Math.min(100, (loadedBytes / totalBytes) * 100)) : 0
-          onProgress({
-            modelId: id,
-            loadedBytes,
-            totalBytes,
-            percent,
-          })
+      // Aggregate per-file progress
+      const fileProgress = new Map<string, { loaded: number; total: number }>()
+      const report = () => {
+        if (!onProgress) return
+        let loadedBytes = 0
+        let totalBytes = 0
+        for (const { loaded, total } of fileProgress.values()) {
+          loadedBytes += loaded || 0
+          totalBytes += total || 0
         }
-
-        // Some builds emit different progress payload shapes; handle flexibly.
-        const progress_callback = (info: any) => {
-          // Expected shapes:
-          // { file, progress, loaded, total } or { url, loaded, total }
-          const key: string =
-            info?.file || info?.url || info?.name || "unknown-" + fileProgress.size
-          const loaded = Number(info?.loaded ?? 0)
-          const total = Number(info?.total ?? 0)
-          fileProgress.set(key, { loaded, total })
-          report()
-        }
-
-        const generator: any = await pipeline("text-generation", id, {
-          device: dev,
-          progress_callback,
-        })
-
-        generatorRef.current = generator
-        setReady(true)
-      } catch (e) {
-        setReady(false)
-        throw e
-      } finally {
-        setLoadingModel(false)
+        const percent = totalBytes > 0 ? Math.max(0, Math.min(100, (loadedBytes / totalBytes) * 100)) : 0
+        onProgress({ modelId: id, loadedBytes, totalBytes, percent })
       }
+      const progress_callback = (info: any) => {
+        const key: string = info?.file || info?.url || info?.name || `part-${fileProgress.size}`
+        const loaded = Number(info?.loaded ?? 0)
+        const total = Number(info?.total ?? 0)
+        fileProgress.set(key, { loaded, total })
+        report()
+      }
+
+      const generator: any = await pipeline("text-generation", id, {
+        device: dev,
+        progress_callback,
+      })
+
+      cacheRef.current.set(id, generator)
     },
-    []
+    [device]
   )
+
+  /**
+   * Switch to an already preloaded model.
+   * Aborts any running generation, flips `ready` true.
+   */
+  const useModel = useCallback(async (id: string) => {
+    const generator = cacheRef.current.get(id)
+    if (!generator) throw new Error("Model not preloaded")
+    // Stop any running gen
+    abortRef.current?.abort()
+    activeRef.current = generator
+    setModelId(id)
+    setReady(true)
+  }, [])
 
   const abort = useCallback(() => {
     abortRef.current?.abort()
@@ -118,10 +113,10 @@ export function useLLM() {
 
   const generate = useCallback(
     async (history: ChatMessage[], opts: GenOpts) => {
-      const generator = generatorRef.current
-      if (!generator) throw new Error("Model not ready")
+      const generator = activeRef.current
+      if (!generator) throw new Error("No model in use")
 
-      // Cancel any prior run
+      // Cancel old gen if any
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
@@ -171,11 +166,14 @@ export function useLLM() {
   return {
     // state
     ready,
-    loadingModel,
     modelId,
     device,
+    // cache info helpers
+    hasCached: (id: string) => cacheRef.current.has(id),
+    cachedIds: () => Array.from(cacheRef.current.keys()),
     // controls
-    loadModel,
+    preloadModel,
+    useModel,
     generate,
     abort,
   }

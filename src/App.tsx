@@ -19,52 +19,70 @@ export default function App() {
   ])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
-  const [loadingModelId, setLoadingModelId] = useState<string | null>(null)
-  const [progress, setProgress] = useState<LoadProgress | null>(null)
+
+  // Track multiple concurrent loads
+  const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({})
+  const [progressMap, setProgressMap] = useState<Record<string, LoadProgress>>({})
 
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const {
     ready,
-    loadingModel, // still used to disable some controls
     modelId,
-    loadModel,
+    device,
+    preloadModel,
+    useModel,
+    hasCached,
     generate,
     abort,
   } = useLLM()
 
-  // Keep focus in the composer after loads / sends
+  // Focus input when model is ready or after sends
   useEffect(() => {
-    if (ready && !loadingModel) inputRef.current?.focus()
-  }, [ready, loadingModel])
+    if (ready) inputRef.current?.focus()
+  }, [ready])
 
   const canSend = ready && !streaming
 
+  // PRELOAD (download) — can run multiple at once
   async function handleLoad(id: string) {
-    if (loadingModelId) return
-    setLoadingModelId(id)
-    setProgress({ modelId: id, loadedBytes: 0, totalBytes: 0, percent: 0 })
+    if (loadingMap[id]) return
+    setLoadingMap(m => ({ ...m, [id]: true }))
+    setProgressMap(m => ({ ...m, [id]: { modelId: id, loadedBytes: 0, totalBytes: 0, percent: 0 } }))
     try {
-      await loadModel(id, undefined, (p) => setProgress(p))
-      inputRef.current?.focus()
+      await preloadModel(id, undefined, (p) => {
+        setProgressMap(m => ({ ...m, [id]: p }))
+      })
     } finally {
-      setLoadingModelId(null)
-      // when done, leave final progress value shown briefly; optional auto-clear:
-      setTimeout(() => setProgress(null), 1200)
+      setLoadingMap(m => ({ ...m, [id]: false }))
+      // keep progress visible a moment (optional)
+      setTimeout(() => {
+        setProgressMap(m => {
+          const { [id]: _, ...rest } = m
+          return rest
+        })
+      }, 1200)
     }
+  }
+
+  // USE (switch active generator)
+  async function handleUse(id: string) {
+    if (!hasCached(id)) {
+      await handleLoad(id) // safety: if user clicks "Use" too early
+    }
+    await useModel(id)
+    inputRef.current?.focus()
   }
 
   async function onSend() {
     if (!input.trim() || !canSend) return
-
     const userMsg: Msg = { role: "user", content: input.trim() }
     const assistantMsg: Msg = { role: "assistant", content: "" }
 
     setMessages(prev => [...prev, userMsg, assistantMsg])
     setInput("")
     setStreaming(true)
-    // DO NOT disable input during streaming; keep focus and let the user type
     inputRef.current?.focus()
 
     const updateAssistant = (delta: string) => {
@@ -77,7 +95,6 @@ export default function App() {
         return out
       })
       bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-      // keep focus sticky
       inputRef.current?.focus()
     }
 
@@ -114,21 +131,27 @@ export default function App() {
     inputRef.current?.focus()
   }
 
-  const loadingPercent = useMemo(
-    () => (progress && progress.modelId === loadingModelId ? progress.percent : null),
-    [progress, loadingModelId]
-  )
-  const loadingBytesLabel = useMemo(() => {
-    if (!progress || progress.modelId !== loadingModelId) return null
-    const { loadedBytes, totalBytes } = progress
-    return totalBytes
-      ? `${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)} (${Math.round(progress.percent)}%)`
-      : `${formatBytes(loadedBytes)}`
-  }, [progress, loadingModelId])
+  // Derive display maps for ModelPicker
+  const progressPercent = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const [id, p] of Object.entries(progressMap)) out[id] = p.percent
+    return out
+  }, [progressMap])
+
+  const progressLabel = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const [id, p] of Object.entries(progressMap)) {
+      const { loadedBytes, totalBytes, percent } = p
+      out[id] = totalBytes
+        ? `${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)} (${Math.round(percent)}%)`
+        : `${formatBytes(loadedBytes)}`
+    }
+    return out
+  }, [progressMap])
 
   return (
     <div className="h-screen w-full bg-neutral-900 text-neutral-100 select-none">
-      {/* Top bar (compact, sticky; only its natural height) */}
+      {/* Top bar */}
       <header className="sticky top-0 z-10 bg-neutral-900/90 backdrop-blur border-b border-neutral-800">
         <div className="mx-auto max-w-5xl px-4">
           <div className="h-14 flex items-center justify-between">
@@ -136,15 +159,17 @@ export default function App() {
               models={CATALOG}
               currentModelId={modelId}
               ready={ready}
-              loadingModelId={loadingModelId}
-              loadingPercent={loadingPercent}
-              loadingBytesLabel={loadingBytesLabel}
+              loadingMap={loadingMap}
+              progressPercent={progressPercent}
+              progressLabel={progressLabel}
+              isCached={hasCached}
               onLoad={handleLoad}
+              onUse={handleUse}
             />
             <button
               className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700"
               onClick={onNewChat}
-              disabled={!ready || streaming}
+              disabled={!ready && !hasCached(modelId)}
               title="Start a new chat"
             >
               New chat
@@ -153,19 +178,18 @@ export default function App() {
         </div>
       </header>
 
-      {/* Chat area fills space between header and footer */}
+      {/* Chat area */}
       <main className="h-[calc(100vh-3.5rem-64px)] overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 relative min-h-full">
-          {/* Only block the chat when no model is selected */}
+          {/* Blocker only when no model is actively in use */}
           {!ready && (
             <div className="absolute inset-0 bg-neutral-900/60 backdrop-blur-sm rounded-xl grid place-content-center border border-neutral-800">
               <div className="text-center">
-                <p className="text-neutral-300">Select a model (top-left) to start</p>
+                <p className="text-neutral-300">Select a model (top-left): Load → Use</p>
               </div>
             </div>
           )}
 
-          {/* Empty state: only when ready AND no user/assistant messages yet */}
           {ready && messages.filter(m => m.role !== "system").length === 0 ? (
             <div className="h-[40vh] grid place-content-center text-center text-neutral-400">
               <p className="text-lg">Say hello to your in-browser model 👋</p>
@@ -184,14 +208,14 @@ export default function App() {
         </div>
       </main>
 
-      {/* Composer (footer) */}
+      {/* Composer */}
       <footer className="border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 py-3">
           <div className="flex gap-2">
             <input
               ref={inputRef}
               className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 select-text"
-              placeholder={ready ? "Type your message…" : "Select a model to start"}
+              placeholder={ready ? "Type your message…" : "Select a model: Load → Use"}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => {
@@ -200,7 +224,6 @@ export default function App() {
                   onSend()
                 }
               }}
-              // Keep input enabled during streaming so focus stays; we only disable when not ready
               disabled={!ready}
             />
             <button
@@ -220,7 +243,7 @@ export default function App() {
             )}
           </div>
           <div className="text-xs text-neutral-500 mt-2 select-text">
-            Runs fully in your browser. Streaming enabled.
+            {device ? `Device: ${device}` : "Device: detecting…"}
           </div>
         </div>
       </footer>
