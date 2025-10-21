@@ -1,10 +1,17 @@
-import React, { useEffect, useRef, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import ChatMessage from "./components/ChatMessage"
 import ModelPicker from "./components/ModelPicker"
-import { useLLM, type ChatMessage as Msg } from "./hooks/useLLM"
+import { useLLM, type ChatMessage as Msg, type LoadProgress } from "./hooks/useLLM"
 import { CATALOG } from "./lib/models"
 
 const DEFAULT_SYSTEM = "You are a helpful assistant. Keep responses concise when possible."
+
+function formatBytes(n: number) {
+  if (!n || n < 0) return "0 B"
+  const u = ["B","KB","MB","GB","TB"]
+  const i = Math.floor(Math.log(n)/Math.log(1024))
+  return `${(n/Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`
+}
 
 export default function App() {
   const [messages, setMessages] = useState<Msg[]>([
@@ -13,15 +20,15 @@ export default function App() {
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
   const [loadingModelId, setLoadingModelId] = useState<string | null>(null)
+  const [progress, setProgress] = useState<LoadProgress | null>(null)
 
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const {
     ready,
-    loadingModel,
+    loadingModel, // still used to disable some controls
     modelId,
-    device, // still available if you want to show it somewhere subtle later
     loadModel,
     generate,
     abort,
@@ -29,21 +36,22 @@ export default function App() {
 
   // Keep focus in the composer after loads / sends
   useEffect(() => {
-    if (ready && !loadingModel) {
-      inputRef.current?.focus()
-    }
+    if (ready && !loadingModel) inputRef.current?.focus()
   }, [ready, loadingModel])
 
-  const canSend = ready && !loadingModel && !streaming
+  const canSend = ready && !streaming
 
   async function handleLoad(id: string) {
     if (loadingModelId) return
     setLoadingModelId(id)
+    setProgress({ modelId: id, loadedBytes: 0, totalBytes: 0, percent: 0 })
     try {
-      await loadModel(id)
+      await loadModel(id, undefined, (p) => setProgress(p))
       inputRef.current?.focus()
     } finally {
       setLoadingModelId(null)
+      // when done, leave final progress value shown briefly; optional auto-clear:
+      setTimeout(() => setProgress(null), 1200)
     }
   }
 
@@ -56,6 +64,7 @@ export default function App() {
     setMessages(prev => [...prev, userMsg, assistantMsg])
     setInput("")
     setStreaming(true)
+    // DO NOT disable input during streaming; keep focus and let the user type
     inputRef.current?.focus()
 
     const updateAssistant = (delta: string) => {
@@ -68,6 +77,8 @@ export default function App() {
         return out
       })
       bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+      // keep focus sticky
+      inputRef.current?.focus()
     }
 
     try {
@@ -103,9 +114,21 @@ export default function App() {
     inputRef.current?.focus()
   }
 
+  const loadingPercent = useMemo(
+    () => (progress && progress.modelId === loadingModelId ? progress.percent : null),
+    [progress, loadingModelId]
+  )
+  const loadingBytesLabel = useMemo(() => {
+    if (!progress || progress.modelId !== loadingModelId) return null
+    const { loadedBytes, totalBytes } = progress
+    return totalBytes
+      ? `${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)} (${Math.round(progress.percent)}%)`
+      : `${formatBytes(loadedBytes)}`
+  }, [progress, loadingModelId])
+
   return (
-    <div className="h-screen w-full bg-neutral-900 text-neutral-100">
-      {/* Top bar (compact, sticky) */}
+    <div className="h-screen w-full bg-neutral-900 text-neutral-100 select-none">
+      {/* Top bar (compact, sticky; only its natural height) */}
       <header className="sticky top-0 z-10 bg-neutral-900/90 backdrop-blur border-b border-neutral-800">
         <div className="mx-auto max-w-5xl px-4">
           <div className="h-14 flex items-center justify-between">
@@ -114,6 +137,8 @@ export default function App() {
               currentModelId={modelId}
               ready={ready}
               loadingModelId={loadingModelId}
+              loadingPercent={loadingPercent}
+              loadingBytesLabel={loadingBytesLabel}
               onLoad={handleLoad}
             />
             <button
@@ -128,44 +153,44 @@ export default function App() {
         </div>
       </header>
 
-      {/* Middle section fills the screen height minus header+footer; chat scrolls under header */}
-      <div className="h-[calc(100vh-3.5rem-64px)]"> {/* 3.5rem = h-14 header, 64px approx footer height */}
-        <main className="h-full overflow-y-auto">
-          <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 relative min-h-full">
-            {/* Blocker overlay only when no model selected */}
-            {!ready && (
-              <div className="absolute inset-0 bg-neutral-900/60 backdrop-blur-sm rounded-xl grid place-content-center border border-neutral-800">
-                <div className="text-center">
-                  <p className="text-neutral-300">Select a model (top-left) to start</p>
+      {/* Chat area fills space between header and footer */}
+      <main className="h-[calc(100vh-3.5rem-64px)] overflow-y-auto">
+        <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 relative min-h-full">
+          {/* Only block the chat when no model is selected */}
+          {!ready && (
+            <div className="absolute inset-0 bg-neutral-900/60 backdrop-blur-sm rounded-xl grid place-content-center border border-neutral-800">
+              <div className="text-center">
+                <p className="text-neutral-300">Select a model (top-left) to start</p>
+              </div>
+            </div>
+          )}
+
+          {/* Empty state: only when ready AND no user/assistant messages yet */}
+          {ready && messages.filter(m => m.role !== "system").length === 0 ? (
+            <div className="h-[40vh] grid place-content-center text-center text-neutral-400">
+              <p className="text-lg">Say hello to your in-browser model 👋</p>
+              <p className="text-sm">Type below to begin.</p>
+            </div>
+          ) : (
+            messages
+              .filter(m => m.role !== "system")
+              .map((m, i) => (
+                <div key={i} className="select-text">
+                  <ChatMessage role={m.role as "user" | "assistant"} content={m.content} />
                 </div>
-              </div>
-            )}
+              ))
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </main>
 
-            {/* Empty state: only when ready AND no user/assistant messages yet */}
-            {ready && messages.filter(m => m.role !== "system").length === 0 ? (
-              <div className="h-[40vh] grid place-content-center text-center text-neutral-400">
-                <p className="text-lg">Say hello to your in-browser model 👋</p>
-                <p className="text-sm">Type below to begin.</p>
-              </div>
-            ) : (
-              messages
-                .filter(m => m.role !== "system")
-                .map((m, i) => (
-                  <ChatMessage key={i} role={m.role as "user" | "assistant"} content={m.content} />
-                ))
-            )}
-            <div ref={bottomRef} />
-          </div>
-        </main>
-      </div>
-
-      {/* Composer (compact footer) */}
+      {/* Composer (footer) */}
       <footer className="border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 py-3">
           <div className="flex gap-2">
             <input
               ref={inputRef}
-              className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+              className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 select-text"
               placeholder={ready ? "Type your message…" : "Select a model to start"}
               value={input}
               onChange={e => setInput(e.target.value)}
@@ -175,7 +200,8 @@ export default function App() {
                   onSend()
                 }
               }}
-              disabled={!ready || streaming}
+              // Keep input enabled during streaming so focus stays; we only disable when not ready
+              disabled={!ready}
             />
             <button
               className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400"
@@ -192,6 +218,9 @@ export default function App() {
                 Stop
               </button>
             )}
+          </div>
+          <div className="text-xs text-neutral-500 mt-2 select-text">
+            Runs fully in your browser. Streaming enabled.
           </div>
         </div>
       </footer>

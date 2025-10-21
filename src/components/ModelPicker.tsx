@@ -6,6 +6,8 @@ type Props = {
   currentModelId: string
   ready: boolean
   loadingModelId: string | null
+  loadingPercent: number | null
+  loadingBytesLabel: string | null
   onLoad: (id: string) => Promise<void>
 }
 
@@ -14,6 +16,8 @@ export default function ModelPicker({
   currentModelId,
   ready,
   loadingModelId,
+  loadingPercent,
+  loadingBytesLabel,
   onLoad,
 }: Props) {
   const [open, setOpen] = useState(false)
@@ -35,7 +39,7 @@ export default function ModelPicker({
     models.find(m => m.id === currentModelId)?.label ?? "No model selected"
 
   return (
-    <div className="relative">
+    <div className="relative select-none">
       <button
         ref={buttonRef}
         className="flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 px-3 py-2 text-sm"
@@ -53,7 +57,7 @@ export default function ModelPicker({
       {open && (
         <div
           ref={panelRef}
-          className="absolute left-0 mt-2 w-[420px] max-w-[95vw] rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl overflow-hidden"
+          className="absolute left-0 mt-2 w-[460px] max-w-[95vw] rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl overflow-hidden"
           role="menu"
         >
           <div className="max-h-[70vh] overflow-auto">
@@ -61,7 +65,7 @@ export default function ModelPicker({
               const isCurrent = ready && m.id === currentModelId
               const isLoadingThis = loadingModelId === m.id
               return (
-                <div key={m.id} className="flex items-start gap-3 justify-between p-3 hover:bg-neutral-800/60">
+                <div key={m.id} className="flex items-start gap-3 justify-between p-3 hover:bg-neutral-800/60 select-none">
                   <div className="min-w-0">
                     <div className="text-sm font-medium truncate">{m.label}</div>
                     <div className="text-xs text-neutral-400">
@@ -72,6 +76,21 @@ export default function ModelPicker({
                     </div>
                     {m.notes && (
                       <div className="text-xs text-neutral-500 mt-0.5">{m.notes}</div>
+                    )}
+
+                    {/* Per-model progress */}
+                    {isLoadingThis && (
+                      <div className="mt-2">
+                        <div className="h-2 rounded bg-neutral-800 overflow-hidden border border-neutral-700">
+                          <div
+                            className="h-full bg-indigo-600 transition-[width] duration-200"
+                            style={{ width: `${Math.max(0, Math.min(100, loadingPercent ?? 0))}%` }}
+                          />
+                        </div>
+                        <div className="text-[11px] text-neutral-400 mt-1">
+                          {loadingBytesLabel ?? "Preparing download…"}
+                        </div>
+                      </div>
                     )}
                   </div>
                   <div className="shrink-0">
@@ -84,7 +103,7 @@ export default function ModelPicker({
                         className="text-xs px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400"
                         onClick={async () => {
                           if (isLoadingThis) return
-                          await onLoad(m.id)
+                          await onLoad(m.id) // switching is handled by parent + hook
                           setOpen(false)
                         }}
                         disabled={isLoadingThis}

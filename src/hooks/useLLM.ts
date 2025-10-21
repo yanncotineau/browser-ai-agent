@@ -2,7 +2,6 @@ import { useCallback, useRef, useState } from "react"
 import { env, pipeline, TextStreamer } from "@huggingface/transformers"
 import type { DeviceKind } from "../lib/models"
 
-// Chat-format message used by the HF chat API
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string }
 
 export type GenOpts = {
@@ -11,17 +10,28 @@ export type GenOpts = {
   onError: (e: unknown) => void
 }
 
+export type LoadProgress = {
+  modelId: string
+  loadedBytes: number
+  totalBytes: number
+  percent: number // 0..100
+}
+
+/**
+ * NOTE: We support:
+ * - Switching models (replace current generator even if one is loaded).
+ * - Per-file download progress aggregation (emits to onProgress).
+ */
 export function useLLM() {
   const [ready, setReady] = useState(false)
   const [loadingModel, setLoadingModel] = useState(false)
   const [device, setDevice] = useState<DeviceKind | "detecting…">("detecting…")
   const [modelId, setModelId] = useState<string>("")
 
-  // The returned pipeline function (callable) + tokenizer live here.
   const generatorRef = useRef<any>(null)
   const abortRef = useRef<AbortController | null>(null)
 
-  // keep logs quiet if supported (harmless otherwise)
+  // keep logs quiet if supported
   try { (env.backends as any)?.onnx && ((env.backends as any).onnx.logLevel = "error") } catch {}
   env.allowLocalModels = false
 
@@ -32,20 +42,62 @@ export function useLLM() {
       : "wasm"
 
   /**
-   * Lazily load a chat generator using the official chat API:
-   * const generator = await pipeline('text-generation', '<repo>', { device: 'webgpu' })
+   * Load or switch to a model.
+   * - Always replaces the current model if one exists.
+   * - Reports aggregated download progress via onProgress (if provided).
    */
   const loadModel = useCallback(
-    async (id: string, preferred?: DeviceKind) => {
-      if (generatorRef.current) return
+    async (
+      id: string,
+      preferred?: DeviceKind,
+      onProgress?: (p: LoadProgress) => void
+    ) => {
+      // If a model is already loaded or a gen is running, abort then replace.
+      abortRef.current?.abort()
+      generatorRef.current = null
+      setReady(false)
+
       setLoadingModel(true)
       try {
         const dev: DeviceKind = preferred ?? detectDevice()
         setDevice(dev)
         setModelId(id)
 
+        // Aggregate per-file progress
+        const fileProgress = new Map<string, { loaded: number; total: number }>()
+        const report = () => {
+          if (!onProgress) return
+          let loadedBytes = 0
+          let totalBytes = 0
+          for (const { loaded, total } of fileProgress.values()) {
+            loadedBytes += loaded || 0
+            totalBytes += total || 0
+          }
+          const percent =
+            totalBytes > 0 ? Math.max(0, Math.min(100, (loadedBytes / totalBytes) * 100)) : 0
+          onProgress({
+            modelId: id,
+            loadedBytes,
+            totalBytes,
+            percent,
+          })
+        }
+
+        // Some builds emit different progress payload shapes; handle flexibly.
+        const progress_callback = (info: any) => {
+          // Expected shapes:
+          // { file, progress, loaded, total } or { url, loaded, total }
+          const key: string =
+            info?.file || info?.url || info?.name || "unknown-" + fileProgress.size
+          const loaded = Number(info?.loaded ?? 0)
+          const total = Number(info?.total ?? 0)
+          fileProgress.set(key, { loaded, total })
+          report()
+        }
+
         const generator: any = await pipeline("text-generation", id, {
-          device: dev, // <- exact syntax the user asked for
+          device: dev,
+          progress_callback,
         })
 
         generatorRef.current = generator
@@ -60,21 +112,10 @@ export function useLLM() {
     []
   )
 
-  const unloadModel = useCallback(() => {
-    abortRef.current?.abort()
-    generatorRef.current = null
-    setReady(false)
-    setModelId("")
-  }, [])
-
   const abort = useCallback(() => {
     abortRef.current?.abort()
   }, [])
 
-  /**
-   * Generate using the chat messages array directly (no manual prompt).
-   * Streams progressively via TextStreamer (handles different build callback names).
-   */
   const generate = useCallback(
     async (history: ChatMessage[], opts: GenOpts) => {
       const generator = generatorRef.current
@@ -87,7 +128,6 @@ export function useLLM() {
 
       let sawAnyDelta = false
 
-      // Progressive streamer wired to your UI
       const tokenizer = generator.tokenizer ?? (generator as any).tokenizer
       const streamer: any = new TextStreamer(tokenizer, {
         skip_prompt: true,
@@ -98,26 +138,19 @@ export function useLLM() {
         sawAnyDelta = true
         opts.onDelta(t)
       }
-      // different builds expose different callback names
       streamer.onText = emit
       streamer.onTextGenerated = emit
       streamer.callback_function = emit
 
       try {
-        // Best-practice defaults for small in-browser instruct models:
         const output = await generator(history, {
-          max_new_tokens: 512,
-          // Deterministic by default to reduce rambling on tiny models:
+          max_new_tokens: 256,
           do_sample: false,
-          // If you want creativity, flip to: do_sample: true, temperature: 0.7, top_p: 0.9
           streamer,
           signal: controller.signal,
-          // No manual stop strings: let the chat template handle roles.
         })
 
-        // Fallback: if streaming never fired, append final assistant message
         if (!sawAnyDelta) {
-          // `output[0].generated_text.at(-1).content` per HF example
           const last = Array.isArray(output)
             ? output[0]?.generated_text?.at(-1)?.content
             : undefined
@@ -143,7 +176,6 @@ export function useLLM() {
     device,
     // controls
     loadModel,
-    unloadModel,
     generate,
     abort,
   }
