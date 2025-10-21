@@ -3,6 +3,7 @@ import ChatMessage from "./components/ChatMessage"
 import ModelPicker from "./components/ModelPicker"
 import { useLLM, type ChatMessage as Msg, type LoadProgress } from "./hooks/useLLM"
 import { CATALOG } from "./lib/models"
+import { FiPlus, FiSend, FiSquare } from "react-icons/fi"
 
 const DEFAULT_SYSTEM = "You are a helpful assistant. Keep responses concise when possible."
 
@@ -11,6 +12,16 @@ function formatBytes(n: number) {
   const u = ["B","KB","MB","GB","TB"]
   const i = Math.floor(Math.log(n)/Math.log(1024))
   return `${(n/Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`
+}
+
+// Consistent centered notice for overlays & empty states
+function CenterNotice({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <div className="h-[40vh] grid place-content-center text-center text-neutral-300">
+      <p className="text-lg font-medium">{title}</p>
+      {subtitle && <p className="text-sm text-neutral-400 mt-1">{subtitle}</p>}
+    </div>
+  )
 }
 
 export default function App() {
@@ -56,7 +67,6 @@ export default function App() {
       })
     } finally {
       setLoadingMap(m => ({ ...m, [id]: false }))
-      // keep progress visible a moment (optional)
       setTimeout(() => {
         setProgressMap(m => {
           const { [id]: _, ...rest } = m
@@ -83,7 +93,12 @@ export default function App() {
     setMessages(prev => [...prev, userMsg, assistantMsg])
     setInput("")
     setStreaming(true)
-    inputRef.current?.focus()
+
+    // Immediately focus input & smooth-scroll on send
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+    })
 
     const updateAssistant = (delta: string) => {
       if (!delta) return
@@ -129,6 +144,9 @@ export default function App() {
     setMessages([{ role: "system", content: DEFAULT_SYSTEM }])
     setInput("")
     inputRef.current?.focus()
+    requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+    })
   }
 
   // Derive display maps for ModelPicker
@@ -149,72 +167,87 @@ export default function App() {
     return out
   }, [progressMap])
 
+  const deviceLabel = device === "detecting…" ? "detecting…" : (device || "").toString().toLowerCase()
+
   return (
-    <div className="h-screen w-full bg-neutral-900 text-neutral-100 select-none">
+    <div className="min-h-screen w-full bg-neutral-900 text-neutral-100 select-none flex flex-col">
       {/* Top bar */}
       <header className="sticky top-0 z-10 bg-neutral-900/90 backdrop-blur border-b border-neutral-800">
-        <div className="mx-auto max-w-5xl px-4">
+        <div className="mx-auto w-full max-w-5xl px-4">
           <div className="h-14 flex items-center justify-between">
-            <ModelPicker
-              models={CATALOG}
-              currentModelId={modelId}
-              ready={ready}
-              loadingMap={loadingMap}
-              progressPercent={progressPercent}
-              progressLabel={progressLabel}
-              isCached={hasCached}
-              onLoad={handleLoad}
-              onUse={handleUse}
-            />
+            <div className="flex items-center gap-3">
+              <ModelPicker
+                models={CATALOG}
+                currentModelId={modelId}
+                ready={ready}
+                loadingMap={loadingMap}
+                progressPercent={progressPercent}
+                progressLabel={progressLabel}
+                isCached={hasCached}
+                onLoad={handleLoad}
+                onUse={handleUse}
+              />
+              {/* Device display (same text style you had before, just moved here) */}
+              <span className="text-xs text-neutral-400">Device: {deviceLabel}</span>
+            </div>
+
             <button
-              className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700"
+              className="h-10 px-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700 inline-flex items-center gap-2"
               onClick={onNewChat}
-              disabled={!ready && !hasCached(modelId)}
               title="Start a new chat"
             >
-              New chat
+              <FiPlus />
+              <span>New chat</span>
             </button>
           </div>
         </div>
       </header>
 
-      {/* Chat area */}
-      <main className="h-[calc(100vh-3.5rem-64px)] overflow-y-auto">
+      {/* Chat area (flex-1 so only this pane scrolls; no page scrollbar) */}
+      <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 relative min-h-full">
-          {/* Blocker only when no model is actively in use */}
-          {!ready && (
-            <div className="absolute inset-0 bg-neutral-900/60 backdrop-blur-sm rounded-xl grid place-content-center border border-neutral-800">
-              <div className="text-center">
-                <p className="text-neutral-300">Select a model (top-left): Load → Use</p>
-              </div>
-            </div>
-          )}
-
-          {ready && messages.filter(m => m.role !== "system").length === 0 ? (
-            <div className="h-[40vh] grid place-content-center text-center text-neutral-400">
-              <p className="text-lg">Say hello to your in-browser model 👋</p>
-              <p className="text-sm">Type below to begin.</p>
-            </div>
+          {/* When no active model, show the SAME CenterNotice as the empty chat state */}
+          {!ready ? (
+            <CenterNotice
+              title="Select a model to start"
+              subtitle="Use the top-left picker: Load → Use"
+            />
+          ) : // When ready but no user/assistant messages yet — same component, same styling
+          messages.filter(m => m.role !== "system").length === 0 ? (
+            <CenterNotice
+              title="Say hello to your in-browser model 👋"
+              subtitle="Type below to begin."
+            />
           ) : (
             messages
               .filter(m => m.role !== "system")
-              .map((m, i) => (
-                <div key={i} className="select-text">
-                  <ChatMessage role={m.role as "user" | "assistant"} content={m.content} />
-                </div>
-              ))
+              .map((m, i, arr) => {
+                const isLast = i === arr.length - 1
+                const pending = isLast && m.role === "assistant" && streaming && m.content.length === 0
+                return (
+                  <div key={i} className="select-text">
+                    <ChatMessage
+                      role={m.role as "user" | "assistant"}
+                      content={m.content}
+                      pending={pending}
+                    />
+                  </div>
+                )
+              })
           )}
           <div ref={bottomRef} />
         </div>
       </main>
 
+
       {/* Composer */}
       <footer className="border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 py-3">
-          <div className="flex gap-2">
+          {/* Align input & buttons to identical height */}
+          <div className="flex gap-2 items-center">
             <input
               ref={inputRef}
-              className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 select-text"
+              className="h-10 flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 select-text"
               placeholder={ready ? "Type your message…" : "Select a model: Load → Use"}
               value={input}
               onChange={e => setInput(e.target.value)}
@@ -226,24 +259,27 @@ export default function App() {
               }}
               disabled={!ready}
             />
-            <button
-              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400"
-              onClick={onSend}
-              disabled={!ready || streaming || !input.trim()}
-            >
-              {streaming ? "Generating…" : "Send"}
-            </button>
-            {streaming && (
+            {/* Show either Send or Stop — same size as input height */}
+            {!streaming ? (
               <button
-                className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
-                onClick={abort}
+                className="h-10 min-w-[108px] px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400 inline-flex items-center justify-center gap-2 text-sm"
+                onClick={onSend}
+                disabled={!ready || !input.trim()}
+                title="Send"
               >
-                Stop
+                <FiSend />
+                <span>Send</span>
+              </button>
+            ) : (
+              <button
+                className="h-10 min-w-[108px] px-4 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 inline-flex items-center justify-center gap-2 text-sm"
+                onClick={abort}
+                title="Stop generation"
+              >
+                <FiSquare />
+                <span>Stop</span>
               </button>
             )}
-          </div>
-          <div className="text-xs text-neutral-500 mt-2 select-text">
-            {device ? `Device: ${device}` : "Device: detecting…"}
           </div>
         </div>
       </footer>
