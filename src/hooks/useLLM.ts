@@ -106,7 +106,7 @@ export function useLLM() {
       try {
         // Best-practice defaults for small in-browser instruct models:
         const output = await generator(history, {
-          max_new_tokens: 256,
+          max_new_tokens: 512,
           // Deterministic by default to reduce rambling on tiny models:
           do_sample: false,
           // If you want creativity, flip to: do_sample: true, temperature: 0.7, top_p: 0.9

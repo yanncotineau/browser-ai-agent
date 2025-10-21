@@ -1,8 +1,8 @@
-import React, { useRef, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import ChatMessage from "./components/ChatMessage"
-import ModelBadge from "./components/ModelBadge"
+import ModelPicker from "./components/ModelPicker"
 import { useLLM, type ChatMessage as Msg } from "./hooks/useLLM"
-import { CATALOG, type ModelSpec } from "./lib/models"
+import { CATALOG } from "./lib/models"
 
 const DEFAULT_SYSTEM = "You are a helpful assistant. Keep responses concise when possible."
 
@@ -12,65 +12,40 @@ export default function App() {
   ])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
-  const [selectedModelId, setSelectedModelId] = useState<string>(CATALOG[0].id)
+  const [loadingModelId, setLoadingModelId] = useState<string | null>(null)
 
+  const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const {
     ready,
     loadingModel,
     modelId,
-    device,
+    device, // still available if you want to show it somewhere subtle later
     loadModel,
-    unloadModel,
     generate,
     abort,
   } = useLLM()
 
-  // ---- Model picker (lazy load) ----
-  if (!ready) {
-    const meta: ModelSpec = CATALOG.find((m) => m.id === selectedModelId) ?? CATALOG[0]
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-neutral-900 text-neutral-100">
-        <div className="w-full max-w-lg p-6 rounded-2xl border border-neutral-800 bg-neutral-900/60 backdrop-blur">
-          <h1 className="text-xl font-semibold mb-2">Browser AI Agent Starter</h1>
-          <p className="text-sm text-neutral-400 mb-4">Load an in-browser model to start chatting.</p>
+  // Keep focus in the composer after loads / sends
+  useEffect(() => {
+    if (ready && !loadingModel) {
+      inputRef.current?.focus()
+    }
+  }, [ready, loadingModel])
 
-          <label className="block text-sm mb-1">Model</label>
-          <select
-            className="w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 mb-3"
-            value={selectedModelId}
-            onChange={(e) => setSelectedModelId(e.target.value)}
-          >
-            {CATALOG.map((m) => (
-              <option key={m.id} value={m.id}>{m.label}</option>
-            ))}
-          </select>
+  const canSend = ready && !loadingModel && !streaming
 
-          <div className="text-xs text-neutral-400 mb-3 space-y-1">
-            <div><span className="opacity-70">HF repo:</span> <code>{meta.id}</code></div>
-            <div><span className="opacity-70">Approx size:</span> {meta.approxSize} <span className="opacity-60">(first load cached locally)</span></div>
-            {meta.notes && <div><span className="opacity-70">Notes:</span> {meta.notes}</div>}
-          </div>
-
-          <button
-            className="w-full px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700"
-            disabled={loadingModel}
-            onClick={() => loadModel(meta.id, meta.preferredDevice)}
-          >
-            {loadingModel ? "Loading model…" : "Load model"}
-          </button>
-
-          <p className="text-xs text-neutral-500 mt-3">
-            Tip: WebGPU is faster if available; we’ll fall back to WASM otherwise.
-          </p>
-        </div>
-      </div>
-    )
+  async function handleLoad(id: string) {
+    if (loadingModelId) return
+    setLoadingModelId(id)
+    try {
+      await loadModel(id)
+      inputRef.current?.focus()
+    } finally {
+      setLoadingModelId(null)
+    }
   }
-
-  // ---- Chat screen ----
-  const canSend = !loadingModel && !streaming
 
   async function onSend() {
     if (!input.trim() || !canSend) return
@@ -78,21 +53,21 @@ export default function App() {
     const userMsg: Msg = { role: "user", content: input.trim() }
     const assistantMsg: Msg = { role: "assistant", content: "" }
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg])
+    setMessages(prev => [...prev, userMsg, assistantMsg])
     setInput("")
     setStreaming(true)
+    inputRef.current?.focus()
 
-    // Progressive append to the last assistant bubble
     const updateAssistant = (delta: string) => {
       if (!delta) return
-      setMessages((prev) => {
+      setMessages(prev => {
         const out = [...prev]
         let idx = out.length - 1
         while (idx >= 0 && out[idx].role !== "assistant") idx--
         if (idx >= 0) out[idx] = { ...out[idx], content: out[idx].content + delta }
         return out
       })
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
     }
 
     try {
@@ -100,109 +75,124 @@ export default function App() {
         onDelta: updateAssistant,
         onDone: () => {
           setStreaming(false)
-          bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+          inputRef.current?.focus()
+          bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
         },
         onError: (e) => {
           setStreaming(false)
-          setMessages((prev) => {
+          setMessages(prev => {
             const out = [...prev]
             let idx = out.length - 1
             while (idx >= 0 && out[idx].role !== "assistant") idx--
             if (idx >= 0) out[idx] = { ...out[idx], content: `⛔ ${String(e)}` }
             return out
           })
+          inputRef.current?.focus()
         },
       })
     } catch {
       setStreaming(false)
+      inputRef.current?.focus()
     }
   }
 
-  function onReset() {
+  function onNewChat() {
     if (streaming) abort()
     setMessages([{ role: "system", content: DEFAULT_SYSTEM }])
     setInput("")
+    inputRef.current?.focus()
   }
 
   return (
-    <div className="h-full grid grid-rows-[auto,1fr,auto] max-w-3xl mx-auto">
-      {/* Header */}
-      <header className="p-4 sticky top-0 z-10 bg-neutral-900/80 backdrop-blur border-b border-neutral-800">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-semibold">Browser AI Agent Starter</h1>
-            <p className="text-sm text-neutral-400">In-browser chat via @huggingface/transformers</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <ModelBadge modelId={modelId} device={String(device)} loading={loadingModel} />
+    <div className="h-screen w-full bg-neutral-900 text-neutral-100">
+      {/* Top bar (compact, sticky) */}
+      <header className="sticky top-0 z-10 bg-neutral-900/90 backdrop-blur border-b border-neutral-800">
+        <div className="mx-auto max-w-5xl px-4">
+          <div className="h-14 flex items-center justify-between">
+            <ModelPicker
+              models={CATALOG}
+              currentModelId={modelId}
+              ready={ready}
+              loadingModelId={loadingModelId}
+              onLoad={handleLoad}
+            />
             <button
-              className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700"
-              onClick={onReset}
-              disabled={loadingModel}
-              title="Clear conversation"
+              className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700"
+              onClick={onNewChat}
+              disabled={!ready || streaming}
+              title="Start a new chat"
             >
-              Reset
-            </button>
-            <button
-              className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700"
-              onClick={unloadModel}
-              disabled={loadingModel || streaming}
-              title="Unload model from memory"
-            >
-              Unload
+              New chat
             </button>
           </div>
         </div>
       </header>
 
-      {/* Messages */}
-      <main className="overflow-y-auto p-4 space-y-3">
-        {messages.filter((m) => m.role !== "system").length === 0 ? (
-          <div className="h-full grid place-content-center text-center text-neutral-400">
-            <p className="text-lg">Start chatting with your fully in-browser model 👇</p>
-            <p className="text-sm">WebGPU if available. WASM fallback. No server calls.</p>
-          </div>
-        ) : (
-          messages
-            .filter((m) => m.role !== "system")
-            .map((m, i) => (
-              <ChatMessage key={i} role={m.role as "user" | "assistant"} content={m.content} />
-            ))
-        )}
-        <div ref={bottomRef} />
-      </main>
+      {/* Middle section fills the screen height minus header+footer; chat scrolls under header */}
+      <div className="h-[calc(100vh-3.5rem-64px)]"> {/* 3.5rem = h-14 header, 64px approx footer height */}
+        <main className="h-full overflow-y-auto">
+          <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 relative min-h-full">
+            {/* Blocker overlay only when no model selected */}
+            {!ready && (
+              <div className="absolute inset-0 bg-neutral-900/60 backdrop-blur-sm rounded-xl grid place-content-center border border-neutral-800">
+                <div className="text-center">
+                  <p className="text-neutral-300">Select a model (top-left) to start</p>
+                </div>
+              </div>
+            )}
 
-      {/* Composer */}
-      <footer className="border-t border-neutral-800 p-3">
-        <div className="flex gap-2">
-          <input
-            className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            placeholder="Type your message…"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                onSend()
-              }
-            }}
-            disabled={!canSend}
-          />
-          <button
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400"
-            onClick={onSend}
-            disabled={!canSend}
-          >
-            {streaming ? "Generating…" : "Send"}
-          </button>
-          {streaming && (
+            {/* Empty state: only when ready AND no user/assistant messages yet */}
+            {ready && messages.filter(m => m.role !== "system").length === 0 ? (
+              <div className="h-[40vh] grid place-content-center text-center text-neutral-400">
+                <p className="text-lg">Say hello to your in-browser model 👋</p>
+                <p className="text-sm">Type below to begin.</p>
+              </div>
+            ) : (
+              messages
+                .filter(m => m.role !== "system")
+                .map((m, i) => (
+                  <ChatMessage key={i} role={m.role as "user" | "assistant"} content={m.content} />
+                ))
+            )}
+            <div ref={bottomRef} />
+          </div>
+        </main>
+      </div>
+
+      {/* Composer (compact footer) */}
+      <footer className="border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
+        <div className="mx-auto max-w-3xl px-4 py-3">
+          <div className="flex gap-2">
+            <input
+              ref={inputRef}
+              className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+              placeholder={ready ? "Type your message…" : "Select a model to start"}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  onSend()
+                }
+              }}
+              disabled={!ready || streaming}
+            />
             <button
-              className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
-              onClick={abort}
+              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400"
+              onClick={onSend}
+              disabled={!ready || streaming || !input.trim()}
             >
-              Stop
+              {streaming ? "Generating…" : "Send"}
             </button>
-          )}
+            {streaming && (
+              <button
+                className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
+                onClick={abort}
+              >
+                Stop
+              </button>
+            )}
+          </div>
         </div>
       </footer>
     </div>
