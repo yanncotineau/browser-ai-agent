@@ -4,6 +4,7 @@ import ModelPicker from "./components/ModelPicker"
 import { useLLM, type ChatMessage as Msg, type LoadProgress } from "./hooks/useLLM"
 import { CATALOG } from "./lib/models"
 import { FiSend, FiSquare, FiPlus } from "react-icons/fi"
+import bgUrl from "./assets/bg.jpg"
 
 const DEFAULT_SYSTEM = "You are a helpful assistant. Keep responses concise when possible."
 
@@ -141,9 +142,14 @@ export default function App() {
   const deviceLabel = device === "detecting…" ? "detecting…" : (device || "").toString().toLowerCase()
 
   return (
-    <div className="h-dvh min-h-dvh w-full bg-neutral-900 text-neutral-100 overflow-hidden flex flex-col">
+    <div className="relative h-dvh min-h-dvh w-full text-neutral-100 overflow-hidden flex flex-col">
+      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
+        <img src={bgUrl} alt="" className="h-full w-full object-cover" />
+        {/* subtle dark overlay for contrast */}
+        <div className="absolute inset-0 bg-black/40" />
+      </div>
       {/* HEADER (auto height) */}
-      <header className="border-b border-neutral-800">
+      <header className="border-b border-white/10 bg-black/30 backdrop-blur-md">
         <div className="mx-auto w-full max-w-5xl px-4">
           <div className="py-2 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -201,7 +207,7 @@ export default function App() {
       </main>
 
       {/* FOOTER (auto height) */}
-      <footer className="border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
+      <footer className="border-t border-white/10 bg-black/30 backdrop-blur-md">
         <div className="mx-auto max-w-3xl px-4">
           <div className="py-2 flex items-center gap-2">
             <input
