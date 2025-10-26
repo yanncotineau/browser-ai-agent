@@ -3,7 +3,7 @@ import ChatMessage from "./components/ChatMessage"
 import ModelPicker from "./components/ModelPicker"
 import { useLLM, type ChatMessage as Msg, type LoadProgress } from "./hooks/useLLM"
 import { CATALOG } from "./lib/models"
-import { FiSend, FiSquare } from "react-icons/fi"
+import { FiSend, FiSquare, FiPlus } from "react-icons/fi"
 
 const DEFAULT_SYSTEM = "You are a helpful assistant. Keep responses concise when possible."
 
@@ -14,73 +14,48 @@ function formatBytes(n: number) {
   return `${(n/Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`
 }
 
-// Consistent centered notice for overlays & empty states
 function CenterNotice({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <div className="h-[40vh] grid place-content-center text-center text-neutral-300">
-      <p className="text-lg font-medium">{title}</p>
-      {subtitle && <p className="text-sm text-neutral-400 mt-1">{subtitle}</p>}
+    <div className="h-full grid place-items-center">
+      <div className="text-center text-neutral-300">
+        <p className="text-lg font-medium">{title}</p>
+        {subtitle && <p className="text-sm text-neutral-400 mt-1">{subtitle}</p>}
+      </div>
     </div>
   )
 }
 
 export default function App() {
-  const [messages, setMessages] = useState<Msg[]>([
-    { role: "system", content: DEFAULT_SYSTEM },
-  ])
+  const [messages, setMessages] = useState<Msg[]>([{ role: "system", content: DEFAULT_SYSTEM }])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
 
-  // Track multiple concurrent loads
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({})
   const [progressMap, setProgressMap] = useState<Record<string, LoadProgress>>({})
 
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  const {
-    ready,
-    modelId,
-    device,
-    preloadModel,
-    useModel,
-    hasCached,
-    generate,
-    abort,
-  } = useLLM()
+  const { ready, modelId, device, preloadModel, useModel, hasCached, generate, abort } = useLLM()
 
-  // Focus input when model is ready or after sends
-  useEffect(() => {
-    if (ready) inputRef.current?.focus()
-  }, [ready])
+  useEffect(() => { if (ready) inputRef.current?.focus() }, [ready])
 
   const canSend = ready && !streaming
 
-  // PRELOAD (download) — can run multiple at once
   async function handleLoad(id: string) {
     if (loadingMap[id]) return
     setLoadingMap(m => ({ ...m, [id]: true }))
     setProgressMap(m => ({ ...m, [id]: { modelId: id, loadedBytes: 0, totalBytes: 0, percent: 0 } }))
     try {
-      await preloadModel(id, undefined, (p) => {
-        setProgressMap(m => ({ ...m, [id]: p }))
-      })
+      await preloadModel(id, undefined, (p) => setProgressMap(m => ({ ...m, [id]: p })))
     } finally {
       setLoadingMap(m => ({ ...m, [id]: false }))
-      setTimeout(() => {
-        setProgressMap(m => {
-          const { [id]: _, ...rest } = m
-          return rest
-        })
-      }, 1200)
+      setTimeout(() => setProgressMap(m => { const { [id]: _, ...rest } = m; return rest }), 1200)
     }
   }
 
-  // USE (switch active generator)
   async function handleUse(id: string) {
-    if (!hasCached(id)) {
-      await handleLoad(id) // safety: if user clicks "Use" too early
-    }
+    if (!hasCached(id)) await handleLoad(id)
     await useModel(id)
     inputRef.current?.focus()
   }
@@ -94,7 +69,6 @@ export default function App() {
     setInput("")
     setStreaming(true)
 
-    // Immediately focus input & smooth-scroll on send
     requestAnimationFrame(() => {
       inputRef.current?.focus()
       bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -144,12 +118,9 @@ export default function App() {
     setMessages([{ role: "system", content: DEFAULT_SYSTEM }])
     setInput("")
     inputRef.current?.focus()
-    requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-    })
+    requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }))
   }
 
-  // Derive display maps for ModelPicker
   const progressPercent = useMemo(() => {
     const out: Record<string, number> = {}
     for (const [id, p] of Object.entries(progressMap)) out[id] = p.percent
@@ -170,12 +141,11 @@ export default function App() {
   const deviceLabel = device === "detecting…" ? "detecting…" : (device || "").toString().toLowerCase()
 
   return (
-    // GRID LAYOUT: header (auto) / main (1fr, scrolls) / footer (auto)
-    <div className="h-screen w-full grid grid-rows-[auto,1fr,auto] overflow-hidden bg-neutral-900 text-neutral-100 select-none">
-      {/* Top bar (row 1) */}
+    <div className="h-dvh min-h-dvh w-full bg-neutral-900 text-neutral-100 overflow-hidden flex flex-col">
+      {/* HEADER (auto height) */}
       <header className="border-b border-neutral-800">
         <div className="mx-auto w-full max-w-5xl px-4">
-          <div className="h-14 flex items-center justify-between">
+          <div className="py-2 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <ModelPicker
                 models={CATALOG}
@@ -188,62 +158,55 @@ export default function App() {
                 onLoad={handleLoad}
                 onUse={handleUse}
               />
-              {/* Device text exactly like before */}
               <span className="text-xs text-neutral-400">Device: {deviceLabel}</span>
             </div>
-
             <button
-              className="h-10 px-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700 inline-flex items-center gap-2"
+              className="h-9 px-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700 inline-flex items-center gap-2"
               onClick={onNewChat}
               title="Start a new chat"
             >
-              {/* icon kept as before */}
-              <svg width="16" height="16" viewBox="0 0 24 24" className="opacity-90"><path fill="currentColor" d="M13 11V5h-2v6H5v2h6v6h2v-6h6v-2z"/></svg>
+              <FiPlus />
               <span>New chat</span>
             </button>
           </div>
         </div>
       </header>
 
-      {/* Chat area (row 2) — ONLY this scrolls */}
-      <main className="min-h-0 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-4 py-4 space-y-3 min-h-full">
-          {/* No model selected */}
+      {/* CHAT (flex-1 takes ~90% of screen; only this scrolls) */}
+      <main className="flex-1 min-h-0 overflow-y-auto">
+        <div className="mx-auto max-w-3xl h-full px-4 py-4">
           {!ready ? (
-            <CenterNotice
-              title="Select a model to start"
-              subtitle="Use the top-left picker: Load → Use"
-            />
-          ) : // Empty conversation (same component, same styling)
-          messages.filter(m => m.role !== "system").length === 0 ? (
-            <CenterNotice
-              title="Say hello to your in-browser model 👋"
-              subtitle="Type below to begin."
-            />
+            <CenterNotice title="Select a model to start" subtitle="Use the top-left picker: Load → Use" />
+          ) : messages.filter(m => m.role !== "system").length === 0 ? (
+            <CenterNotice title="Say hello to your in-browser model 👋" subtitle="Type below to begin." />
           ) : (
-            messages
-              .filter(m => m.role !== "system")
-              .map((m, i, arr) => {
-                const isLast = i === arr.length - 1
-                const pending = isLast && m.role === "assistant" && streaming && m.content.length === 0
-                return (
-                  <div key={i} className="select-text">
-                    <ChatMessage role={m.role as "user" | "assistant"} content={m.content} pending={pending} />
-                  </div>
-                )
-              })
+            <>
+              <div className="space-y-3">
+                {messages
+                  .filter(m => m.role !== "system")
+                  .map((m, i, arr) => {
+                    const isLast = i === arr.length - 1
+                    const pending = isLast && m.role === "assistant" && streaming && m.content.length === 0
+                    return (
+                      <div key={i} className="select-text">
+                        <ChatMessage role={m.role as "user" | "assistant"} content={m.content} pending={pending} />
+                      </div>
+                    )
+                  })}
+              </div>
+              <div ref={bottomRef} />
+            </>
           )}
-          <div ref={bottomRef} />
         </div>
       </main>
 
-      {/* Composer (row 3) */}
+      {/* FOOTER (auto height) */}
       <footer className="border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
-        <div className="mx-auto max-w-3xl px-4 py-3">
-          <div className="flex gap-2 items-center">
+        <div className="mx-auto max-w-3xl px-4">
+          <div className="py-2 flex items-center gap-2">
             <input
               ref={inputRef}
-              className="h-10 flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 select-text"
+              className="h-9 flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 select-text"
               placeholder={ready ? "Type your message…" : "Select a model: Load → Use"}
               value={input}
               onChange={e => setInput(e.target.value)}
@@ -255,10 +218,9 @@ export default function App() {
               }}
               disabled={!ready}
             />
-            {/* Show either Send or Stop — same size as input height */}
             {!streaming ? (
               <button
-                className="h-10 min-w-[108px] px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400 inline-flex items-center justify-center gap-2 text-sm"
+                className="h-9 min-w-[108px] px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400 inline-flex items-center justify-center gap-2 text-sm"
                 onClick={onSend}
                 disabled={!ready || !input.trim()}
                 title="Send"
@@ -268,7 +230,7 @@ export default function App() {
               </button>
             ) : (
               <button
-                className="h-10 min-w-[108px] px-4 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 inline-flex items-center justify-center gap-2 text-sm"
+                className="h-9 min-w-[108px] px-4 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 inline-flex items-center justify-center gap-2 text-sm"
                 onClick={abort}
                 title="Stop generation"
               >
