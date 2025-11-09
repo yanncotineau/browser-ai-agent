@@ -108,7 +108,10 @@ export function useLLM() {
   }, [])
 
   const abort = useCallback(() => {
-    abortRef.current?.abort()
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
   }, [])
 
   const generate = useCallback(
@@ -129,6 +132,8 @@ export function useLLM() {
         skip_special_tokens: true,
       })
       const emit = (t: string) => {
+        // if we aborted, ignore late chunks coming from the streamer
+        if (controller.signal.aborted) return
         if (!t) return
         sawAnyDelta = true
         opts.onDelta(t)
@@ -139,7 +144,7 @@ export function useLLM() {
 
       try {
         const output = await generator(history, {
-          max_new_tokens: 256,
+          max_new_tokens: 1024,
           do_sample: false,
           streamer,
           signal: controller.signal,

@@ -18,6 +18,13 @@ export const CATALOG: ModelSpec[] = [
     preferredDevice: "webgpu",
   },
   {
+    label: "LFM2-700M",
+    id: "onnx-community/LFM2-700M-ONNX",
+    approxSize: "≈1.2 GB",
+    notes: "Best quality under 2 GB; good instruction following.",
+    preferredDevice: "webgpu",
+  },
+  {
     label: "TinySwallow 1.5B Instruct (q4f16)",
     id: "onnx-community/TinySwallow-1.5B-Instruct-ONNX",
     approxSize: "≈1.2 GB",

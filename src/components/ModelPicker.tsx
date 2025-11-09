@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { ModelSpec } from "../lib/models"
 
 type Props = {

@@ -3,8 +3,9 @@ import ChatMessage from "./components/ChatMessage"
 import ModelPicker from "./components/ModelPicker"
 import { useLLM, type ChatMessage as Msg, type LoadProgress } from "./hooks/useLLM"
 import { CATALOG } from "./lib/models"
-import { FiSend, FiSquare, FiPlus } from "react-icons/fi"
+import { FiPlus } from "react-icons/fi"
 import bgUrl from "./assets/bg.jpg"
+import ChatFooter from "./components/ChatFooter"
 
 const DEFAULT_SYSTEM = "You are a helpful assistant. Keep responses concise when possible."
 
@@ -34,7 +35,7 @@ export default function App() {
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({})
   const [progressMap, setProgressMap] = useState<Record<string, LoadProgress>>({})
 
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const { ready, modelId, device, preloadModel, useModel, hasCached, generate, abort } = useLLM()
@@ -149,7 +150,7 @@ export default function App() {
         <div className="absolute inset-0 bg-black/40" />
       </div>
       {/* HEADER (auto height) */}
-      <header className="border-b border-white/10 bg-black/30 backdrop-blur-md">
+      <header className="relative z-20 border-b border-white/10 bg-black/30 backdrop-blur-md">
         <div className="mx-auto w-full max-w-5xl px-4">
           <div className="py-2 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -195,10 +196,21 @@ export default function App() {
                     const pending = isLast && m.role === "assistant" && streaming && m.content.length === 0
                     return (
                       <div key={i} className="select-text">
-                        <ChatMessage role={m.role as "user" | "assistant"} content={m.content} pending={pending} />
+                        <ChatMessage
+                          role={m.role as "user" | "assistant"}
+                          content={m.content}
+                          pending={pending}
+                          canCopy={
+                            m.role === "assistant" &&
+                            m.content.length > 0 &&
+                            // don’t show while this is the one being streamed
+                            !(isLast && streaming)
+                          }
+                        />
                       </div>
                     )
-                  })}
+                  })
+                }
               </div>
               <div ref={bottomRef} />
             </>
@@ -207,46 +219,18 @@ export default function App() {
       </main>
 
       {/* FOOTER (auto height) */}
-      <footer className="border-t border-white/10 bg-black/30 backdrop-blur-md">
-        <div className="mx-auto max-w-3xl px-4">
-          <div className="py-2 flex items-center gap-2">
-            <input
-              ref={inputRef}
-              className="h-9 flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 select-text"
-              placeholder={ready ? "Type your message…" : "Select a model: Load → Use"}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault()
-                  onSend()
-                }
-              }}
-              disabled={!ready}
-            />
-            {!streaming ? (
-              <button
-                className="h-9 min-w-[108px] px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-700 disabled:text-neutral-400 inline-flex items-center justify-center gap-2 text-sm"
-                onClick={onSend}
-                disabled={!ready || !input.trim()}
-                title="Send"
-              >
-                <FiSend />
-                <span>Send</span>
-              </button>
-            ) : (
-              <button
-                className="h-9 min-w-[108px] px-4 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 inline-flex items-center justify-center gap-2 text-sm"
-                onClick={abort}
-                title="Stop generation"
-              >
-                <FiSquare />
-                <span>Stop</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </footer>
+      <ChatFooter
+        ref={inputRef}
+        ready={ready}
+        streaming={streaming}
+        value={input}
+        onChange={setInput}
+        onSend={onSend}
+        onStop={() => {
+          abort()
+          setStreaming(false)
+        }}
+      />
     </div>
   )
 }
