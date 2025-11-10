@@ -84,9 +84,6 @@ export default function ModelPicker({
                     <div className="text-xs text-neutral-400">
                       <span className="opacity-70">Size:</span> {m.approxSize}
                     </div>
-                    {m.notes && (
-                      <div className="text-xs text-neutral-500 mt-0.5">{m.notes}</div>
-                    )}
 
                     {isLoading && (
                       <div className="mt-2">
